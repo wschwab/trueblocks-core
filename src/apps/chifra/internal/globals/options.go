@@ -6,37 +6,27 @@ package globals
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 
 	"github.com/TrueBlocks/trueblocks-core/src/apps/chifra/pkg/config"
 	"github.com/TrueBlocks/trueblocks-core/src/apps/chifra/pkg/logger"
+	"github.com/TrueBlocks/trueblocks-core/src/apps/chifra/pkg/output"
 	"github.com/TrueBlocks/trueblocks-core/src/apps/chifra/pkg/tslib"
 	"github.com/spf13/cobra"
 )
 
 type GlobalOptions struct {
-	Verbose  bool      `json:"verbose,omitempty"`
-	LogLevel uint64    `json:"logLevel,omitempty"`
-	NoHeader bool      `json:"noHeader,omitempty"`
-	Chain    string    `json:"chain,omitempty"`
-	Wei      bool      `json:"wei,omitempty"`
-	Ether    bool      `json:"ether,omitempty"`
-	Dollars  bool      `json:"dollars,omitempty"`
-	Help     bool      `json:"help,omitempty"`
-	Raw      bool      `json:"raw,omitempty"`
-	ToFile   bool      `json:"toFile,omitempty"`
-	File     string    `json:"file,omitempty"`
-	Version  bool      `json:"version,omitempty"`
-	Noop     bool      `json:"noop,omitempty"`
-	NoColor  bool      `json:"noColor,omitempty"`
-	OutputFn string    `json:"outputFn,omitempty"`
-	Append   bool      `json:"append,omitempty"`
-	Format   string    `json:"format,omitempty"`
-	TestMode bool      `json:"testMode,omitempty"`
-	ApiMode  bool      `json:"apiMode,omitempty"`
-	Writer   io.Writer `json:"writer,omitempty"`
+	Wei     bool   `json:"wei,omitempty"`
+	Ether   bool   `json:"ether,omitempty"`
+	Dollars bool   `json:"dollars,omitempty"`
+	Help    bool   `json:"help,omitempty"`
+	ToFile  bool   `json:"toFile,omitempty"`
+	File    string `json:"file,omitempty"`
+	Version bool   `json:"version,omitempty"`
+	Noop    bool   `json:"noop,omitempty"`
+	NoColor bool   `json:"noColor,omitempty"`
+	output.OutputOptions
 }
 
 func (opts *GlobalOptions) TestLog() {
@@ -48,7 +38,7 @@ func (opts *GlobalOptions) TestLog() {
 	logger.TestLog(opts.Ether, "Ether: ", opts.Ether)
 	logger.TestLog(opts.Dollars, "Dollars: ", opts.Dollars)
 	logger.TestLog(opts.Help, "Help: ", opts.Help)
-	logger.TestLog(opts.Raw, "Raw: ", opts.Raw)
+	logger.TestLog(opts.ShowRaw, "ShowRaw: ", opts.ShowRaw)
 	logger.TestLog(opts.ToFile, "ToFile: ", opts.ToFile)
 	logger.TestLog(len(opts.File) > 0, "File: ", opts.File)
 	logger.TestLog(opts.Version, "Version: ", opts.Version)
@@ -58,19 +48,17 @@ func (opts *GlobalOptions) TestLog() {
 	logger.TestLog(opts.Append, "Append: ", opts.Append)
 	logger.TestLog(len(opts.Format) > 0, "Format: ", opts.Format)
 	// logger.TestLog(opts.TestMode, "TestMode: ", opts.TestMode)
-	logger.TestLog(opts.ApiMode, "ApiMode: ", opts.ApiMode)
 }
 
 func InitGlobals(cmd *cobra.Command, opts *GlobalOptions) {
 	opts.TestMode = os.Getenv("TEST_MODE") == "true"
-	opts.ApiMode = os.Getenv("API_MODE") == "true"
 
 	cmd.Flags().StringVarP(&opts.Format, "fmt", "x", "", "export format, one of [none|json*|txt|csv|api]")
 	cmd.Flags().BoolVarP(&opts.Verbose, "verbose", "v", false, "enable verbose (increase detail with --log_level)")
 	cmd.Flags().BoolVarP(&opts.Help, "help", "h", false, "display this help screen")
 
 	cmd.Flags().StringVarP(&opts.Chain, "chain", "", "", "EVM compatible chain you're running against")
-	cmd.Flags().BoolVarP(&opts.Raw, "raw", "", false, "report JSON data from the node with minimal processing")
+	cmd.Flags().BoolVarP(&opts.ShowRaw, "raw", "", false, "report JSON data from the node with minimal processing")
 	cmd.Flags().BoolVarP(&opts.Version, "version", "", false, "display the current version of the tool")
 	cmd.Flags().BoolVarP(&opts.Noop, "noop", "", false, "")
 	cmd.Flags().BoolVarP(&opts.NoColor, "nocolor", "", false, "")
@@ -79,10 +67,10 @@ func InitGlobals(cmd *cobra.Command, opts *GlobalOptions) {
 	cmd.Flags().BoolVarP(&opts.Wei, "wei", "", false, "specify value in wei (the default)")
 	cmd.Flags().BoolVarP(&opts.Ether, "ether", "", false, "specify value in ether")
 	cmd.Flags().BoolVarP(&opts.Dollars, "dollars", "", false, "specify value in US dollars")
+	cmd.Flags().StringVarP(&opts.File, "file", "", "", "specify multiple command line options in a file")
 	cmd.Flags().BoolVarP(&opts.ToFile, "to_file", "", false, "write the results to a temporary file and return the filename")
-	cmd.Flags().StringVarP(&opts.File, "file", "", "", "specify multiple sets of command line options in a file")
-	cmd.Flags().StringVarP(&opts.OutputFn, "output", "", "", "write the results to file 'fn' and return the filename")
-	cmd.Flags().BoolVarP(&opts.Append, "append", "", false, "enable verbose (increase detail with --log_level)")
+	cmd.Flags().StringVarP(&opts.OutputFn, "output", "", "", "redirect results from stdout to the given file, create if not present")
+	cmd.Flags().BoolVarP(&opts.Append, "append", "", false, "if true, open OutputFn for append (truncate otherwise)")
 
 	cmd.Flags().MarkHidden("chain")
 	cmd.Flags().MarkHidden("raw")
@@ -106,7 +94,7 @@ func InitGlobals(cmd *cobra.Command, opts *GlobalOptions) {
 
 func (opts *GlobalOptions) toCmdLine() string {
 	options := ""
-	if opts.Raw {
+	if opts.ShowRaw {
 		options += " --raw"
 	}
 	if opts.Version {
@@ -160,7 +148,6 @@ func GlobalsFinishParseApi(w http.ResponseWriter, r *http.Request) *GlobalOption
 
 	opts.Writer = w
 	opts.TestMode = r.Header.Get("User-Agent") == "testRunner"
-	opts.ApiMode = true
 
 	for key, value := range r.URL.Query() {
 		switch key {
@@ -169,7 +156,7 @@ func GlobalsFinishParseApi(w http.ResponseWriter, r *http.Request) *GlobalOption
 		case "verbose":
 			opts.Verbose = true
 		case "raw":
-			opts.Raw = true
+			opts.ShowRaw = true
 		case "version":
 			opts.Version = true
 		case "noop":

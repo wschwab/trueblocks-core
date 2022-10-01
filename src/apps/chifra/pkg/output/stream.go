@@ -16,20 +16,30 @@ import (
 )
 
 // OutputOptions allow more granular configuration of output details
-type OutputOptions = struct {
+// TODO (dawid): This used to be "type OutputOptions = struct" (the '=' sign). Was that a typo or purposful? I couldn't embed it in the GlobalOptions data structure, so I removed the '='
+type OutputOptions struct {
 	// If set, raw data from the RPC will be printed instead of the model
 	ShowRaw bool
 	// If set, hidden fields will be printed as well (depends on the format)
-	ShowHidden bool
-	// If set, the first printed line will be names of the keys in the model
-	// (ignored when format is "json")
-	ShowKeys bool
+	Verbose bool
+	// If Verbose is true, this is the level of detail (verbose alone implies LogLevel=1)
+	LogLevel uint64
+	// If set, the first line of "txt" and "csv" output will NOT (the keys) will squelched
+	NoHeader bool
 	// The format in which to print the output
 	Format string
 	// How to indent JSON output
 	JsonIndent string
-	// Meta data to attach to server response
-	Meta *rpcClient.MetaData
+	// Chain name
+	Chain string
+	// Flag to check if we are in test mode
+	TestMode bool
+	// Output file name. If present, we will write output to this file
+	OutputFn string
+	// If true and OutputFn is non-empty, open OutputFn for appending (create if not present)
+	Append bool
+	// The writer
+	Writer io.Writer
 }
 
 var formatToSeparator = map[string]rune{
@@ -70,7 +80,7 @@ func StreamModel(w io.Writer, model types.Model, options OutputOptions) error {
 	}
 	outputWriter := csv.NewWriter(w)
 	outputWriter.Comma = rune(separator)
-	if options.ShowKeys {
+	if !options.NoHeader { // notice double negative
 		outputWriter.Write(model.Order)
 	}
 	outputWriter.Write(strs)
@@ -115,9 +125,10 @@ func closeApiOrRawResponse(w io.Writer, errsToReport []string, options *OutputOp
 	} else {
 		w.Write([]byte("\n  ]"))
 	}
-	if options.Meta != nil {
+	if options.Format == "api" {
 		w.Write([]byte(",\n  \"meta\": "))
-		b, _ := json.MarshalIndent(options.Meta, "  ", options.JsonIndent)
+		meta := getMetaData(options.Chain, options.TestMode)
+		b, _ := json.MarshalIndent(meta, "  ", options.JsonIndent)
 		w.Write(b)
 	}
 	if options.Format == "api" && len(errsToReport) > 0 {
@@ -142,45 +153,52 @@ func printErrors(errsToReport []string) {
 	}
 }
 
+func getMetaData(chain string, testMode bool) (meta *rpcClient.MetaData) {
+	meta, err := rpcClient.GetMetaData(chain, testMode)
+	if err != nil {
+		// In case of error, we return empty MetaData to not break JSON
+		return
+	}
+	return
+}
+
 // StreamMany outputs models or raw data as they are acquired
 func StreamMany[Raw types.RawData](
 	ctx context.Context,
-	w io.Writer,
-	// TODO(dszlachta): I renamed this to renderData instead of getData. More accurate
-	renderData func(models chan types.Modeler[Raw], errors chan error),
+	fetchData func(modelChan chan types.Modeler[Raw], errorChan chan error),
 	options OutputOptions,
 ) error {
+	outputWriter := options.GetOutputFileWriter()
 	errsToReport := make([]string, 0)
 	errsMutex := sync.Mutex{}
 
-	// TODO(dszlachta): let's make channels more obvious. Please rename these to modelChan and errorChan throughout (even into the called function)
-	models := make(chan types.Modeler[Raw])
-	errors := make(chan error)
+	modelChan := make(chan types.Modeler[Raw])
+	errorChan := make(chan error)
 
 	// Check if the current item is the first that we print. If so, we may want to
 	// print keys or postpone adding JSON comma between the elements
 	first := true
 	// Start getting the data
 	go func() {
-		renderData(models, errors)
-		close(models)
-		close(errors)
+		fetchData(modelChan, errorChan)
+		close(modelChan)
+		close(errorChan)
 	}()
 
 	// If we are printing JSON, we want to make sure that opening and closing
 	// brackets are printed
 	if options.Format == "json" {
-		w.Write([]byte("{\n  \"data\": [\n    "))
+		outputWriter.Write([]byte("{\n  \"data\": [\n    "))
 		defer func() {
-			w.Write([]byte("\n  ]\n}\n"))
+			outputWriter.Write([]byte("\n  ]\n}\n"))
 			printErrors(errsToReport)
 		}()
 	}
 	// If printing API format, we want to add meta information and errors
 	if options.ShowRaw || options.Format == "api" {
-		w.Write([]byte("{\n  \"data\": [\n    "))
+		outputWriter.Write([]byte("{\n  \"data\": [\n    "))
 		defer func() {
-			closeApiOrRawResponse(w, errsToReport, &options)
+			closeApiOrRawResponse(outputWriter, errsToReport, &options)
 		}()
 	}
 
@@ -203,25 +221,25 @@ func StreamMany[Raw types.RawData](
 
 	for {
 		select {
-		case model, ok := <-models:
+		case model, ok := <-modelChan:
 			if !ok {
 				return nil
 			}
 
 			// If the output is JSON and we are printing another item, put `,` in front of it
 			if !first && (options.Format == "json" || options.Format == "api") {
-				w.Write([]byte(","))
+				outputWriter.Write([]byte(","))
 			}
 			var err error
 			if options.ShowRaw {
-				err = StreamRaw(w, model.Raw())
+				err = StreamRaw(outputWriter, model.Raw())
 			} else {
-				modelValue := model.Model(options.ShowHidden, options.Format)
+				modelValue := model.Model(options.Verbose, options.Format)
 				if customFormat {
-					err = StreamWithTemplate(w, modelValue, tmpl)
+					err = StreamWithTemplate(outputWriter, modelValue, tmpl)
 				} else {
-					err = StreamModel(w, modelValue, OutputOptions{
-						ShowKeys:   first && options.ShowKeys,
+					err = StreamModel(outputWriter, modelValue, OutputOptions{
+						NoHeader:   !first || options.NoHeader,
 						Format:     options.Format,
 						JsonIndent: "  ",
 					})
@@ -232,7 +250,7 @@ func StreamMany[Raw types.RawData](
 			}
 			first = false
 
-		case err, ok := <-errors:
+		case err, ok := <-errorChan:
 			if !ok {
 				continue
 			}

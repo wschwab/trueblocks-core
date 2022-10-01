@@ -9,7 +9,6 @@ import (
 	"testing"
 	"text/template"
 
-	"github.com/TrueBlocks/trueblocks-core/src/apps/chifra/pkg/rpcClient"
 	"github.com/TrueBlocks/trueblocks-core/src/apps/chifra/pkg/types"
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -41,7 +40,7 @@ func helperStreamFormats(w csv.Writer, outputBuffer *bytes.Buffer, format string
 	buffer := new(bytes.Buffer)
 	StreamModel(buffer, input.Model(false, format), OutputOptions{
 		Format:   format,
-		ShowKeys: expectKeys,
+		NoHeader: !expectKeys,
 	})
 	result := buffer.String()
 
@@ -151,7 +150,8 @@ func TestStreamMany(t *testing.T) {
 
 	// Print the values and try to re-parse them to check if
 	// we get the same data
-	StreamMany(context.Background(), buffer, renderData, OutputOptions{
+	StreamMany(context.Background(), renderData, OutputOptions{
+		Writer: buffer,
 		Format: "json",
 	})
 
@@ -184,12 +184,9 @@ func TestApiFormat(t *testing.T) {
 			IsError:          false,
 		}
 	}
-	err := StreamMany(context.Background(), outputBuffer, renderData, OutputOptions{
+	err := StreamMany(context.Background(), renderData, OutputOptions{
+		Writer: outputBuffer,
 		Format: "api",
-		Meta: &rpcClient.MetaData{
-			Latest:    1000,
-			Finalized: 1000,
-		},
 	})
 	if err != nil {
 		t.Fatal(err)

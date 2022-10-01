@@ -49,7 +49,7 @@ func (opts *ReceiptsOptions) ReceiptsInternal() (err error, handled bool) {
 	}
 
 	// EXISTING_CODE
-	if opts.Articulate {
+	if opts.Articulate || opts.Globals.ToFile {
 		err = opts.Globals.PassItOn("getReceipts", opts.Globals.Chain, opts.toCmdLine(), opts.getEnvStr())
 		return err, true
 	}
@@ -62,18 +62,17 @@ func (opts *ReceiptsOptions) ReceiptsInternal() (err error, handled bool) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// TODO(dszlachta): I renamed this function to `renderTransaction`. Render meaning "send out". We're not really getting as nothing is returned
-	renderTransaction := func(models chan types.Modeler[types.RawReceipt], errors chan error) {
+	fetchTransactionData := func(modelChan chan types.Modeler[types.RawReceipt], errorChan chan error) {
 		// TODO: stream transaction identifiers
 		for idIndex, rng := range opts.TransactionIds {
 			txList, err := rng.ResolveTxs(opts.Globals.Chain)
 			// TODO: rpcClient should return a custom type of error in this case
 			if err != nil && strings.Contains(err.Error(), "not found") {
-				errors <- err
+				errorChan <- err
 				continue
 			}
 			if err != nil {
-				errors <- err
+				errorChan <- err
 				cancel()
 				return
 			}
@@ -81,7 +80,7 @@ func (opts *ReceiptsOptions) ReceiptsInternal() (err error, handled bool) {
 				if tx.BlockNumber < uint32(byzantiumBlockNumber) && !erigonUsed {
 					err = opts.Globals.PassItOn("getReceipts", opts.Globals.Chain, getReceiptsCmdLine(opts, []string{rng.Orig}), opts.getEnvStr())
 					if err != nil {
-						errors <- err
+						errorChan <- err
 						cancel()
 						return
 					}
@@ -90,35 +89,32 @@ func (opts *ReceiptsOptions) ReceiptsInternal() (err error, handled bool) {
 
 				receipt, err := rpcClient.GetTransactionReceipt(opts.Globals.Chain, uint64(tx.BlockNumber), uint64(tx.TransactionIndex))
 				if err != nil && err.Error() == "not found" {
-					errors <- fmt.Errorf("transaction %s not found", opts.Transactions[idIndex])
+					errorChan <- fmt.Errorf("transaction %s not found", opts.Transactions[idIndex])
 					continue
 				}
 				if err != nil {
-					errors <- err
+					errorChan <- err
 					cancel()
 					return
 				}
 
-				models <- &receipt
+				modelChan <- &receipt
 			}
 		}
 	}
 
-	// TODO(dszlachta): There's no reason for this processing to be in the calling code. Put this inside of StreamMany and remove it from the OutputOptions. It makes this code much cleaner.
-	var meta *rpcClient.MetaData
-	if opts.Globals.Format == "api" {
-		meta, err = rpcClient.GetMetaData(opts.Globals.Chain, opts.Globals.TestMode)
-		if err != nil {
-			return err, true
-		}
-	}
-	err = output.StreamMany(ctx, opts.Globals.Writer, renderTransaction, output.OutputOptions{
-		ShowKeys:   !opts.Globals.NoHeader,
-		ShowRaw:    opts.Globals.Raw,
-		ShowHidden: opts.Globals.Verbose,
+	err = output.StreamMany(ctx, fetchTransactionData, output.OutputOptions{
+		Writer:     opts.Globals.Writer,
+		Chain:      opts.Globals.Chain,
+		TestMode:   opts.Globals.TestMode,
+		NoHeader:   opts.Globals.NoHeader,
+		ShowRaw:    opts.Globals.ShowRaw,
+		Verbose:    opts.Globals.Verbose,
+		LogLevel:   opts.Globals.LogLevel,
 		Format:     opts.Globals.Format,
+		OutputFn:   opts.Globals.OutputFn,
+		Append:     opts.Globals.Append,
 		JsonIndent: "  ",
-		Meta:       meta,
 	})
 
 	handled = true

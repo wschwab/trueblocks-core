@@ -10,7 +10,7 @@ import (
 
 // HandlePrefundOnly handles chifra names --prefund
 func (opts *NamesOptions) HandlePrefundOnly() error {
-	err := opts.Globals.RenderHeader(types.SimpleName{}, &opts.Globals.Writer, opts.Globals.Format, opts.Globals.ApiMode, opts.Globals.NoHeader, true)
+	err := opts.Globals.RenderHeader(types.SimpleName{}, &opts.Globals.Writer, opts.Globals.Format, opts.Globals.NoHeader, true)
 	defer opts.Globals.RenderFooter()
 	if err != nil {
 		return err
@@ -45,7 +45,7 @@ func (opts *NamesOptions) PrefundOnly() bool {
 	if len(opts.Terms) > 0 || opts.Expand || opts.MatchCase || opts.All || opts.Custom || opts.Named ||
 		opts.Addr || opts.Tags || opts.ToCustom ||
 		opts.Clean || len(opts.Autoname) > 0 || opts.Create || opts.Update ||
-		opts.Delete || opts.Undelete || opts.Remove || len(opts.Globals.OutputFn) > 0 {
+		opts.Delete || opts.Undelete || opts.Remove {
 		return false
 	}
 	return true
